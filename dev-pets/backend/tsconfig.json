@@ -1,0 +1,30 @@
+{
+	"compilerOptions": {
+		"module": "commonjs",
+		"declaration": true,
+		"removeComments": true,
+		"emitDecoratorMetadata": true,
+		"experimentalDecorators": true,
+		"allowSyntheticDefaultImports": true,
+		"target": "ES2023",
+		"sourceMap": true,
+		"outDir": "./dist",
+		"baseUrl": "./",
+		"paths": {
+			"@/*": ["*"],
+			"@prisma/generated": ["./prisma/generated/"],
+			"@prisma/generated/*": ["./prisma/generated/*"]
+		},
+		"esModuleInterop": true,
+		"incremental": true,
+		"skipLibCheck": true,
+		"strict": true,
+		"strictNullChecks": true,
+		"forceConsistentCasingInFileNames": true,
+		"noImplicitAny": true,
+		"strictBindCallApply": true,
+		"noFallthroughCasesInSwitch": true,
+		"jsx": "react"
+	},
+	"include": ["./src/**/*", "./prisma/generated/index.d.ts", "drizzle"]
+}
