@@ -1,0 +1,21 @@
+{
+  // Используйте IntelliSense, чтобы узнать о возможных атрибутах.
+  // Наведите указатель мыши, чтобы просмотреть описания существующих атрибутов.
+  // Для получения дополнительной информации посетите: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "extendscript-debug",
+      "request": "launch",
+      "name": "Launch AME Script",
+      "program": "${workspaceFolder}/gif_to_webm.jsx",
+      "hostAppSpecifier": "ame-26.0"
+    },
+    {
+      "type": "extendscript-debug",
+      "request": "attach",
+      "name": "Attach to ExtendScript Engine",
+      "hostAppSpecifier": "ame-26.0"
+    }
+  ]
+}
