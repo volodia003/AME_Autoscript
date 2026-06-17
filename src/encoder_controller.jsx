@@ -85,7 +85,7 @@ var EncoderController = (function () {
   function interpolateQuality(st) {
     if (st.samples.length < 2) return null;
 
-    var targetSize = (Config.minFileSize + Config.maxFileSize) / 2;
+    var targetSize = (Config.userSettings.minFileSize + Config.userSettings.maxFileSize) / 2;
 
     // Ищем ближайший замер ниже целевого и ближайший выше
     var below = null; // замер с size <= targetSize, ближайший к target
@@ -134,7 +134,7 @@ var EncoderController = (function () {
    * и не превышает максимальный размер.
    */
   function rememberCandidate(st, quality, bitrate, size, outputPath) {
-    if (size > Config.maxFileSize) return;
+    if (size > Config.userSettings.maxFileSize) return;
     if (st.bestQuality < 0 || size > st.bestSize) {
       st.bestQuality = quality;
       st.bestBitrate = bitrate;
@@ -191,14 +191,16 @@ var EncoderController = (function () {
     var elapsed = Utils.formatDuration(Utils.now() - st.totalStart);
 
     if (st.bestQuality < 0 || st.bestOutputPath === null) {
-      Utils.log("[RESULT] Не найдено варианта <= " + Utils.formatSize(Config.maxFileSize) + " (" + elapsed + ")");
+      Utils.log(
+        "[RESULT] Не найдено варианта <= " + Utils.formatSize(Config.userSettings.maxFileSize) + " (" + elapsed + ")",
+      );
       cleanupOutputs(st, null);
       st.success = false;
       return;
     }
 
     Utils.log("============================================");
-    if (st.bestSize >= Config.minFileSize && st.bestSize <= Config.maxFileSize) {
+    if (st.bestSize >= Config.userSettings.minFileSize && st.bestSize <= Config.userSettings.maxFileSize) {
       Utils.log("Результат в целевом диапазоне:");
     } else {
       Utils.log("Целевой диапазон не достигнут. Лучший вариант:");
@@ -221,7 +223,7 @@ var EncoderController = (function () {
     // Сохраняем замер для интерполяции
     st.samples.push({ quality: qualityUsed, size: sizeBytes });
 
-    if (sizeBytes > Config.maxFileSize) {
+    if (sizeBytes > Config.userSettings.maxFileSize) {
       if (qualityUsed === st.low && qualityUsed === 0) {
         // При Q=0 не уложились — снижаем bitrate
         st.currentBitrate -= Config.bitrateStep;
@@ -241,7 +243,7 @@ var EncoderController = (function () {
       }
       // Слишком большой — снижаем quality
       st.high = qualityUsed - 1;
-    } else if (sizeBytes < Config.minFileSize) {
+    } else if (sizeBytes < Config.userSettings.minFileSize) {
       // Слишком маленький — повышаем quality
       st.low = qualityUsed + 1;
     } else {
@@ -364,12 +366,12 @@ var EncoderController = (function () {
     var sourceSize = Utils.getFileSize(st.sourcePath);
     if (sourceSize <= 0) return false;
 
-    if (sourceSize <= Config.maxFileSize) {
+    if (sourceSize <= Config.userSettings.maxFileSize) {
       Utils.log(
         "[SHORTCUT] Исходник " +
           Utils.formatSize(sourceSize) +
           " <= " +
-          Utils.formatSize(Config.maxFileSize) +
+          Utils.formatSize(Config.userSettings.maxFileSize) +
           ", пробуем Q=100",
       );
       st.currentQuality = Config.qualityMax;

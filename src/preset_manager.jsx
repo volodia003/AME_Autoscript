@@ -52,28 +52,34 @@ var PresetManager = (function () {
    * Если тег не найден — возвращает контент без изменений.
    */
   function replaceTagValue(content, tagName, newValue) {
-    var namePattern = new RegExp("(<ParamIdentifier>\\s*" + tagName + "\\s*<\\/ParamIdentifier>)");
-    var nameMatch = content.match(namePattern);
-    if (!nameMatch) {
+    // Ищем позицию идентификатора
+    var idPattern = new RegExp("<ParamIdentifier>\\s*" + tagName + "\\s*<\\/ParamIdentifier>");
+    var idMatch = content.match(idPattern);
+
+    if (!idMatch) {
       Utils.log("[WARN] Тег не найден в пресете: " + tagName);
       return content;
     }
 
-    var namePos = content.indexOf(nameMatch[0]);
-    var afterName = namePos - nameMatch[0].length;
+    var idPos = content.indexOf(idMatch[0]);
 
-    var valuePattern = /<ParamValue>\s*\d+\s*<\/ParamValue>/;
-    var tail = content.substring(afterName);
-    var valueMatch = tail.match(valuePattern);
-    if (!valueMatch) {
-      Utils.log("[WARN] <ParamValue> не найден после тега: " + tagName);
+    // Отрезаем всё, что идёт ДО идентификатора
+    var beforeId = content.substring(0, idPos);
+
+    // Ищем ближайшие теги <ParamValue> двигаясь назад от идентификатора
+    var valStartPos = beforeId.lastIndexOf("<ParamValue>");
+    var valEndPos = beforeId.lastIndexOf("</ParamValue>");
+
+    if (valStartPos === -1 || valEndPos === -1 || valStartPos > valEndPos) {
+      Utils.log("[WARN] <ParamValue> не найден перед тегом: " + tagName);
       return content;
     }
 
-    var valuePos = afterName + tail.indexOf(valueMatch[0]);
-    var replacement = "<ParamValue>" + String(newValue) + "</ParamValue>";
+    // Формируем новую строку, аккуратно заменяя значение внутри целевых тегов
+    var head = content.substring(0, valStartPos + 12); // 12 - это длина строки "<ParamValue>"
+    var tail = content.substring(valEndPos);
 
-    return content.substring(0, valuePos) + replacement + content.substring(valuePos + valueMatch[0].length);
+    return head + String(newValue) + tail;
   }
 
   /**
@@ -111,7 +117,7 @@ var PresetManager = (function () {
    * Вызывается после завершения всех кодировок.
    */
   function cleanup() {
-    var tempPath = projectRoot + Utils.sep + "public"  + Utils.sep + "Stickers_temp.epr";
+    var tempPath = projectRoot + Utils.sep + "public" + Utils.sep + "Stickers_temp.epr";
     if (Utils.removeFile(tempPath)) {
       Utils.log("[CLEANUP] Удалён временный пресет: Stickers_temp.epr");
     }
