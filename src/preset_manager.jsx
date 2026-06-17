@@ -52,34 +52,31 @@ var PresetManager = (function () {
    * Если тег не найден — возвращает контент без изменений.
    */
   function replaceTagValue(content, tagName, newValue) {
-    // Ищем позицию идентификатора
-    var idPattern = new RegExp("<ParamIdentifier>\\s*" + tagName + "\\s*<\\/ParamIdentifier>");
-    var idMatch = content.match(idPattern);
+    // Разбиваем весь XML на массив блоков параметров
+    var blocks = content.split("<ExporterParam ");
+    var found = false;
 
-    if (!idMatch) {
+    for (var i = 1; i < blocks.length; i++) {
+      // Ищем блок, который содержит нужный нам идентификатор
+      var idTag = "<ParamIdentifier>" + tagName + "</ParamIdentifier>";
+      if (blocks[i].indexOf(idTag) !== -1) {
+        // Как только нашли правильный блок, меняем <ParamValue> только внутри него
+        blocks[i] = blocks[i].replace(
+          /<ParamValue>[\s\S]*?<\/ParamValue>/,
+          "<ParamValue>" + newValue + "</ParamValue>",
+        );
+        found = true;
+        break; // Параметр обновлен, выходим из цикла
+      }
+    }
+
+    if (!found) {
       Utils.log("[WARN] Тег не найден в пресете: " + tagName);
       return content;
     }
 
-    var idPos = content.indexOf(idMatch[0]);
-
-    // Отрезаем всё, что идёт ДО идентификатора
-    var beforeId = content.substring(0, idPos);
-
-    // Ищем ближайшие теги <ParamValue> двигаясь назад от идентификатора
-    var valStartPos = beforeId.lastIndexOf("<ParamValue>");
-    var valEndPos = beforeId.lastIndexOf("</ParamValue>");
-
-    if (valStartPos === -1 || valEndPos === -1 || valStartPos > valEndPos) {
-      Utils.log("[WARN] <ParamValue> не найден перед тегом: " + tagName);
-      return content;
-    }
-
-    // Формируем новую строку, аккуратно заменяя значение внутри целевых тегов
-    var head = content.substring(0, valStartPos + 12); // 12 - это длина строки "<ParamValue>"
-    var tail = content.substring(valEndPos);
-
-    return head + String(newValue) + tail;
+    // Склеиваем блоки обратно в полноценный XML
+    return blocks.join("<ExporterParam ");
   }
 
   /**

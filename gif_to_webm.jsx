@@ -26,11 +26,11 @@
 
 var settings = Config.userSettings;
 
-//settings.outputFolder = "/Users/vladimir/Projects/Stickers/";
+settings.outputFolder = "/Users/vladimir/Projects/Stickers/test/Output";
 
 settings.sourcePath = "/Users/vladimir/Projects/Stickers/test";
 
-settings.presetFileName = "Telegram.epr";
+settings.presetFileName = "metadata.epr";
 
 settings.outputSize = 512;
 

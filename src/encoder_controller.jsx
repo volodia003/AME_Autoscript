@@ -1,52 +1,23 @@
 /**
  * encoder_controller.jsx — Контроллер кодирования.
- *
- * Бинарный поиск оптимального quality (без массива candidates —
- * работаем напрямую с low/high как значениями quality 0–100).
- *
- * После первого кодирования пытается оценить целевой quality
- * линейной интерполяцией для ускорения сходимости.
- *
- * Защита от дубликатов: пропускает уже проверенные комбинации Q+bitrate.
  */
-
 var EncoderController = (function () {
-  /**
-   * Создаёт начальное состояние для обработки одного файла.
-   * startQuality позволяет задать стартовый quality (адаптивный старт из предыдущего файла).
-   */
   function createState(sourcePath, destPath, exporter, startQuality) {
-    var initQuality =
-      startQuality !== undefined && startQuality >= Config.qualityMin && startQuality <= Config.qualityMax
-        ? startQuality
-        : Config.qualityStart;
-
     return {
       sourcePath: sourcePath,
       destPath: destPath,
       exporter: exporter,
-
-      // Диапазон поиска quality (напрямую, без массива)
       low: Config.qualityMin,
       high: Config.qualityMax,
-      currentQuality: initQuality,
+      currentQuality: startQuality !== undefined ? startQuality : Config.qualityStart,
       currentBitrate: Config.defaultBitrate,
-
-      // Лучший найденный результат (<= maxFileSize)
       bestQuality: -1,
       bestBitrate: -1,
       bestSize: -1,
       bestOutputPath: null,
-
-      // Все выходные файлы (для очистки)
       outputPaths: [],
-
-      // История: ключ "Q_bitrate" → sizeBytes (защита от дубликатов)
       history: {},
-
-      // Все замеры для интерполяции: [{ quality, size }]
       samples: [],
-
       isEncoding: false,
       finished: false,
       success: false,
@@ -55,46 +26,25 @@ var EncoderController = (function () {
     };
   }
 
-  /**
-   * Формирует ключ для истории проверенных комбинаций.
-   */
-  function historyKey(quality, bitrate) {
-    return String(quality) + "_" + String(bitrate);
+  function historyKey(q, b) {
+    return String(q) + "_" + String(b);
+  }
+  function alreadyTried(st, q, b) {
+    return st.history[historyKey(q, b)] !== undefined;
+  }
+  function recordHistory(st, q, b, size) {
+    st.history[historyKey(q, b)] = size;
   }
 
-  /**
-   * Проверяет, была ли уже проверена эта комбинация.
-   */
-  function alreadyTried(st, quality, bitrate) {
-    return st.history[historyKey(quality, bitrate)] !== undefined;
-  }
-
-  /**
-   * Записывает результат в историю.
-   */
-  function recordHistory(st, quality, bitrate, size) {
-    st.history[historyKey(quality, bitrate)] = size;
-  }
-
-  /**
-   * Линейная интерполяция целевого quality по всем накопленным замерам.
-   * Выбирает два замера, наиболее близких к целевому размеру (один выше, один ниже),
-   * и интерполирует между ними.
-   * Возвращает оценку quality или null если данных недостаточно.
-   */
   function interpolateQuality(st) {
     if (st.samples.length < 2) return null;
-
-    var targetSize = (Config.userSettings.minFileSize + Config.userSettings.maxFileSize) / 2;
-
-    // Ищем ближайший замер ниже целевого и ближайший выше
-    var below = null; // замер с size <= targetSize, ближайший к target
-    var above = null; // замер с size > targetSize, ближайший к target
+    var targetSize = (Config.userSettings.minFileSize * 1024 + Config.userSettings.maxFileSize * 1024) / 2;
+    var below = null,
+      above = null;
 
     for (var i = 0; i < st.samples.length; i++) {
       var s = st.samples[i];
-      if (s.size <= 0) continue; // пропускаем неудачные
-
+      if (s.size <= 0) continue;
       if (s.size <= targetSize) {
         if (!below || s.size > below.size) below = s;
       } else {
@@ -102,39 +52,23 @@ var EncoderController = (function () {
       }
     }
 
-    // Нужны оба — один ниже, один выше целевого
-    if (!below || !above) return null;
-    if (below.quality === above.quality) return null;
-
+    if (!below || !above || below.quality === above.quality) return null;
     var dSize = above.size - below.size;
     if (Math.abs(dSize) < 100) return null;
 
-    var estimated = below.quality + ((targetSize - below.size) * (above.quality - below.quality)) / dSize;
-
-    estimated = Math.round(estimated);
-    if (estimated < st.low) estimated = st.low;
-    if (estimated > st.high) estimated = st.high;
-
-    return estimated;
+    var estimated = Math.round(below.quality + ((targetSize - below.size) * (above.quality - below.quality)) / dSize);
+    return Math.max(st.low, Math.min(st.high, estimated));
   }
 
-  /**
-   * Регистрирует выходной файл для последующей очистки.
-   */
   function registerOutput(st, path) {
-    if (!path) return;
     for (var i = 0; i < st.outputPaths.length; i++) {
       if (st.outputPaths[i] === path) return;
     }
     st.outputPaths.push(path);
   }
 
-  /**
-   * Запоминает кандидата, если он лучше текущего лучшего
-   * и не превышает максимальный размер.
-   */
   function rememberCandidate(st, quality, bitrate, size, outputPath) {
-    if (size > Config.userSettings.maxFileSize) return;
+    if (size > Config.userSettings.maxFileSize * 1024) return;
     if (st.bestQuality < 0 || size > st.bestSize) {
       st.bestQuality = quality;
       st.bestBitrate = bitrate;
@@ -143,68 +77,29 @@ var EncoderController = (function () {
     }
   }
 
-  /**
-   * Удаляет все промежуточные файлы, кроме keepPath.
-   */
   function cleanupOutputs(st, keepPath) {
     for (var i = 0; i < st.outputPaths.length; i++) {
-      var p = st.outputPaths[i];
-      if (keepPath && p === keepPath) continue;
-      Utils.removeFile(p);
+      if (st.outputPaths[i] !== keepPath) Utils.removeFile(st.outputPaths[i]);
     }
   }
 
-  /**
-   * Ищет самый свежий .webm файл в папке вывода.
-   */
-  function findLatestWebm(st) {
-    try {
-      var folder = new Folder(Utils.normalizePath(st.destPath));
-      if (!folder.exists) return null;
-
-      var base = Utils.baseName(st.sourcePath);
-      var files = folder.getFiles(function (f) {
-        if (!(f instanceof File)) return false;
-        var n = String(f.name).toLowerCase();
-        if (!Utils.endsWith(n, ".webm")) return false;
-        return String(f.name).indexOf(base) === 0;
-      });
-
-      if (!files || files.length === 0) return null;
-
-      var latest = files[0];
-      for (var i = 1; i < files.length; i++) {
-        if (files[i].modified > latest.modified) latest = files[i];
-      }
-      return latest.fsName;
-    } catch (e) {
-      Utils.log("[WARN] findLatestWebm: " + e.message);
-      return null;
-    }
-  }
-
-  /**
-   * Завершает поиск для текущего файла.
-   */
   function finalize(st) {
     st.finished = true;
     var elapsed = Utils.formatDuration(Utils.now() - st.totalStart);
+    var maxBytes = Config.userSettings.maxFileSize * 1024;
+    var minBytes = Config.userSettings.minFileSize * 1024;
 
     if (st.bestQuality < 0 || st.bestOutputPath === null) {
-      Utils.log(
-        "[RESULT] Не найдено варианта <= " + Utils.formatSize(Config.userSettings.maxFileSize) + " (" + elapsed + ")",
-      );
+      Utils.log("[RESULT] Не найдено варианта <= " + Utils.formatSize(maxBytes) + " (" + elapsed + ")");
       cleanupOutputs(st, null);
       st.success = false;
       return;
     }
 
     Utils.log("============================================");
-    if (st.bestSize >= Config.userSettings.minFileSize && st.bestSize <= Config.userSettings.maxFileSize) {
-      Utils.log("Результат в целевом диапазоне:");
-    } else {
-      Utils.log("Целевой диапазон не достигнут. Лучший вариант:");
-    }
+    if (st.bestSize >= minBytes && st.bestSize <= maxBytes) Utils.log("Результат в целевом диапазоне:");
+    else Utils.log("Целевой диапазон не достигнут. Лучший вариант:");
+
     Utils.log(
       "Q=" + st.bestQuality + ", Bitrate=" + st.bestBitrate + " | " + Utils.formatSize(st.bestSize) + " | " + elapsed,
     );
@@ -215,67 +110,45 @@ var EncoderController = (function () {
     st.success = true;
   }
 
-  /**
-   * Определяет следующий шаг поиска по результату кодирования.
-   * Использует интерполяцию после 2+ замеров, иначе бинарный поиск.
-   */
   function chooseNext(st, qualityUsed, sizeBytes) {
-    // Сохраняем замер для интерполяции
     st.samples.push({ quality: qualityUsed, size: sizeBytes });
+    var maxBytes = Config.userSettings.maxFileSize * 1024;
+    var minBytes = Config.userSettings.minFileSize * 1024;
 
-    if (sizeBytes > Config.userSettings.maxFileSize) {
-      if (qualityUsed === st.low && qualityUsed === 0) {
-        // При Q=0 не уложились — снижаем bitrate
+    if (sizeBytes > maxBytes) {
+      if (qualityUsed === 0) {
         st.currentBitrate -= Config.bitrateStep;
-        if (st.currentBitrate < Config.minBitrate) {
-          Utils.log("[INFO] Битрейт минимален, подходящий вариант не найден.");
-          finalize(st);
-          return;
-        }
-        // Сбрасываем диапазон и историю для нового bitrate
+        if (st.currentBitrate < Config.minBitrate) return finalize(st);
         st.low = Config.qualityMin;
         st.high = Config.qualityMax;
         st.samples = [];
-        Utils.log("[INFO] Q=0 не уложились. Bitrate -> " + st.currentBitrate);
         st.currentQuality = 0;
-        tryEncode(st);
-        return;
+        Utils.log("[INFO] Q=0 не уложились. Bitrate -> " + st.currentBitrate);
+        return tryEncode(st);
       }
-      // Слишком большой — снижаем quality
       st.high = qualityUsed - 1;
-    } else if (sizeBytes < Config.userSettings.minFileSize) {
-      // Слишком маленький — повышаем quality
+    } else if (sizeBytes < minBytes) {
       st.low = qualityUsed + 1;
     } else {
-      // Попали в диапазон
       Utils.log("[OK] В диапазоне при Q=" + qualityUsed + ", Bitrate=" + st.currentBitrate);
       st.finished = true;
-      cleanupOutputs(st, st.bestOutputPath);
-      return;
+      return cleanupOutputs(st, st.bestOutputPath);
     }
 
-    if (st.low > st.high) {
-      finalize(st);
-      return;
-    }
+    if (st.low > st.high) return finalize(st);
 
-    // Пробуем интерполяцию, иначе бинарный поиск
     var estimated = interpolateQuality(st);
     if (estimated !== null && estimated >= st.low && estimated <= st.high) {
       st.currentQuality = estimated;
-      Utils.log("[INTERPOLATE] Оценка: Q=" + estimated);
     } else {
       st.currentQuality = Math.floor((st.low + st.high) / 2);
     }
 
-    // Защита от дубликатов: если эта комбинация уже проверена, сдвигаемся
     if (alreadyTried(st, st.currentQuality, st.currentBitrate)) {
-      Utils.log("[SKIP] Q=" + st.currentQuality + " уже проверен, сдвигаемся");
-      // Ищем ближайший непроверенный quality в диапазоне
       var found = false;
       for (var offset = 1; offset <= st.high - st.low; offset++) {
-        var up = st.currentQuality + offset;
-        var down = st.currentQuality - offset;
+        var up = st.currentQuality + offset,
+          down = st.currentQuality - offset;
         if (up <= st.high && !alreadyTried(st, up, st.currentBitrate)) {
           st.currentQuality = up;
           found = true;
@@ -287,59 +160,22 @@ var EncoderController = (function () {
           break;
         }
       }
-      if (!found) {
-        finalize(st);
-        return;
-      }
+      if (!found) return finalize(st);
     }
-
     tryEncode(st);
   }
 
-  /**
-   * Обрабатывает результат успешного кодирования.
-   */
-  function onEncodeDone(st, wrapper, qualityUsed, bitrateUsed) {
+  function onEncodeDone(st, qualityUsed, bitrateUsed) {
     var iterTime = Utils.formatDuration(Utils.now() - st.iterationStart);
-    var outputPath = null;
 
-    // Пытаемся получить путь из outputFiles
-    if (wrapper && wrapper.outputFiles && wrapper.outputFiles.length > 0) {
-      outputPath = wrapper.outputFiles[0];
-    } else {
-      var start = Utils.now();
-      while (Utils.now() - start < Config.outputFilePollTimeout) {
-        app.wait(Config.outputFilePollInterval);
-        if (wrapper && wrapper.outputFiles && wrapper.outputFiles.length > 0) {
-          outputPath = wrapper.outputFiles[0];
-          break;
-        }
-      }
-    }
-
-    // Фоллбэк: ищем свежий .webm
-    if (!outputPath) {
-      outputPath = findLatestWebm(st);
-    }
-
-    if (!outputPath) {
-      Utils.log("[WARN] Не удалось получить путь к выходному файлу.");
-      if (st.low > st.high) {
-        finalize(st);
-      } else {
-        st.currentQuality = Math.floor((st.low + st.high) / 2);
-        tryEncode(st);
-      }
-      return;
-    }
-
-    // Ждём стабилизации размера файла
+    // ИДЕМПОТЕНТНОСТЬ: Мы точно знаем путь, нет нужды парсить массивы и искать дубликаты
+    var outputPath = st.destPath;
     var size = Utils.waitForStableFile(outputPath);
+
     if (size < 0) {
       Utils.log("[WARN] Файл не найден или нечитаем: " + outputPath);
-      if (st.low > st.high) {
-        finalize(st);
-      } else {
+      if (st.low > st.high) finalize(st);
+      else {
         st.currentQuality = Math.floor((st.low + st.high) / 2);
         tryEncode(st);
       }
@@ -347,75 +183,41 @@ var EncoderController = (function () {
     }
 
     Utils.log("Q=" + qualityUsed + " | " + Utils.formatSize(size) + " | " + iterTime);
-
     registerOutput(st, outputPath);
     recordHistory(st, qualityUsed, bitrateUsed, size);
     rememberCandidate(st, qualityUsed, bitrateUsed, size, outputPath);
     chooseNext(st, qualityUsed, size);
   }
 
-  /**
-   * Проверяет, можно ли сразу попробовать Q=100 для маленького исходника.
-   * Если исходный файл уже меньше maxFileSize, начинаем с максимального quality.
-   * Возвращает true если стартовый quality был изменён.
-   */
   function trySmallFileShortcut(st) {
-    // Только при первом вызове (до первого кодирования)
     if (st.totalStart) return false;
-
     var sourceSize = Utils.getFileSize(st.sourcePath);
-    if (sourceSize <= 0) return false;
-
-    if (sourceSize <= Config.userSettings.maxFileSize) {
-      Utils.log(
-        "[SHORTCUT] Исходник " +
-          Utils.formatSize(sourceSize) +
-          " <= " +
-          Utils.formatSize(Config.userSettings.maxFileSize) +
-          ", пробуем Q=100",
-      );
+    if (sourceSize > 0 && sourceSize <= Config.userSettings.maxFileSize * 1024) {
       st.currentQuality = Config.qualityMax;
       return true;
     }
     return false;
   }
 
-  /**
-   * Запускает кодирование с текущими параметрами.
-   */
   function tryEncode(st) {
-    if (st.finished) return;
-    if (st.isEncoding) return;
+    if (st.finished || st.isEncoding) return;
+    if (st.low > st.high) return finalize(st);
 
-    if (st.low > st.high) {
-      Utils.log("[INFO] Нет доступных значений quality.");
-      finalize(st);
-      return;
-    }
-
-    // Инициализируем таймер при первом вызове
     if (!st.totalStart) {
       st.totalStart = Utils.now();
-      // Проверяем, можно ли начать с Q=100 для маленького файла
       trySmallFileShortcut(st);
     }
 
-    var quality = st.currentQuality;
-    var bitrate = st.currentBitrate;
-
-    // Защита от дубликатов
-    if (alreadyTried(st, quality, bitrate)) {
-      Utils.log("[SKIP] Q=" + quality + ", Bitrate=" + bitrate + " уже проверен");
-      finalize(st);
-      return;
-    }
+    var quality = st.currentQuality,
+      bitrate = st.currentBitrate;
+    if (alreadyTried(st, quality, bitrate)) return finalize(st);
 
     var presetPath = PresetManager.createTempPreset(quality, bitrate);
-    if (!presetPath) {
-      Utils.log("[ERROR] Не удалось создать пресет для Q=" + quality);
-      finalize(st);
-      return;
-    }
+    if (!presetPath) return finalize(st);
+
+    // ПРИНУДИТЕЛЬНАЯ ОЧИСТКА: Гарантируем, что AME не создаст файл _1.webm
+    var outF = new File(st.destPath);
+    if (outF.exists) outF.remove();
 
     st.iterationStart = Utils.now();
     Utils.log("--- Try Q=" + quality + ", Bitrate=" + bitrate + " [" + st.low + ".." + st.high + "] ---");
@@ -424,21 +226,12 @@ var EncoderController = (function () {
 
     if (!wrapper) {
       Utils.log("[WARN] exportItem вернул null для Q=" + quality);
-      // Сужаем диапазон и пробуем середину
-      if (quality === st.low) {
-        st.low++;
-      } else if (quality === st.high) {
-        st.high--;
-      } else {
-        st.high = quality - 1;
-      }
-      if (st.low > st.high) {
-        finalize(st);
-        return;
-      }
+      if (quality === st.low) st.low++;
+      else if (quality === st.high) st.high--;
+      else st.high = quality - 1;
+      if (st.low > st.high) return finalize(st);
       st.currentQuality = Math.floor((st.low + st.high) / 2);
-      tryEncode(st);
-      return;
+      return tryEncode(st);
     }
 
     st.isEncoding = true;
@@ -448,9 +241,7 @@ var EncoderController = (function () {
       "onEncodeProgress",
       function (ev) {
         var p = Number(ev.result);
-        if (!isNaN(p) && (p % 25 === 0 || p === 100)) {
-          $.writeln("  Q=" + quality + " progress: " + p + "%");
-        }
+        if (!isNaN(p) && (p % 25 === 0 || p === 100)) $.writeln("  Q=" + quality + " progress: " + p + "%");
       },
       false,
     );
@@ -463,24 +254,14 @@ var EncoderController = (function () {
         st.isEncoding = false;
 
         if (ev.result === "Done!") {
-          onEncodeDone(st, wrapper, quality, bitrate);
+          onEncodeDone(st, quality, bitrate);
         } else {
           Utils.log("[WARN] Кодирование не успешно: " + ev.result);
-          // Записываем в историю как неудачу
           recordHistory(st, quality, bitrate, -1);
-
-          if (quality === st.low) {
-            st.low++;
-          } else if (quality === st.high) {
-            st.high--;
-          } else {
-            st.high = quality - 1;
-          }
-
-          if (st.low > st.high) {
-            finalize(st);
-            return;
-          }
+          if (quality === st.low) st.low++;
+          else if (quality === st.high) st.high--;
+          else st.high = quality - 1;
+          if (st.low > st.high) return finalize(st);
           st.currentQuality = Math.floor((st.low + st.high) / 2);
           tryEncode(st);
         }
@@ -489,11 +270,5 @@ var EncoderController = (function () {
     );
   }
 
-  // Публичный API
-  return {
-    createState: createState,
-    tryEncode: tryEncode,
-    finalize: finalize,
-    cleanupOutputs: cleanupOutputs,
-  };
+  return { createState: createState, tryEncode: tryEncode, finalize: finalize, cleanupOutputs: cleanupOutputs };
 })();
