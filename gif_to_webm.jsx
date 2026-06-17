@@ -18,12 +18,24 @@
  *   4. Запустите этот скрипт через File → Scripts → Run Script
  */
 
-#include "modules/config.jsx";
-#include "modules/utils.jsx";
-#include "modules/preset_manager.jsx";
-#include "modules/encoder_controller.jsx";
-#include "modules/file_processor.jsx";
+//@include "src/config.jsx"
+//@include "src/utils.jsx";
+//@include "src/preset_manager.jsx";
+//@include "src/encoder_controller.jsx";
+//@include "src/file_processor.jsx";
 
+var settings = Config.userSettings;
+
+//settings.outputFolder = "/Users/vladimir/Projects/Stickers/";
+
+settings.sourcePath = "/Users/vladimir/Projects/Stickers/test";
+
+settings.presetFileName = "Telegram.epr";
+
+settings.outputSize = 512;
+
+settings.minFileSize = 230;
+settings.maxFileSize = 256;
 // Запуск
 FileProcessor.run();
 

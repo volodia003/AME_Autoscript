@@ -1,0 +1,4 @@
+*.log
+Stickers_temp.epr
+/example/
+*.tmp
